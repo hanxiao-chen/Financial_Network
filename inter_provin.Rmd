@@ -1,0 +1,1127 @@
+
+```{r}
+library(corrplot);library(igraph);library(psych);library("ape");library(pheatmap);library(RColorBrewer);library(EMD);library(RTransferEntropy);library(ggplot2);library(lmtest);library(maps);library(mapdata);library(ggplot2);library(maptools);library(mapproj);library(rgdal);library(sf);library(NetworkToolbox);library(tseries);library(weights)
+#load("f:/chrome/0508.RData")
+raw_data <- read.csv("province_data.csv")
+raw_data$Date <- as.Date(raw_data$Date)
+raw_data <- raw_data[order(raw_data$Date),]
+log_dif_date <- diff(log(as.matrix(raw_data[-1])))
+
+#log_dif_date <- (log_dif_date- matrix(rep(apply(log_dif_date,2,mean),nrow(log_dif_date)),ncol = 31,byrow = T))/matrix(rep(apply(log_dif_date,2,var)**.5,nrow(log_dif_date)),ncol = 31,byrow = T)
+```
+
+
+```{r}
+## 去过的地方
+#provinces_visited <- c("Shanxi","Yunnan","Anhui","Jiangxi","Qinghai","Henan","Heilongjiang","Liaoning","Hebei","Xinjiang","Tianjin","Gansu","Shandong")
+
+provinces_visited <- c( "Xizang","Ningxia","Guizhou","NeiMongol","Hainan","Qinghai","Hebei","Shanxi","Yunnan","Xinjiang","Shaanxi","Gansu")
+
+# provinces_visited <- c("Shandong","Jiangsu","Hubei","Anhui","Liaoning")
+
+provinces_visited_df <- data.frame(province_pinyin = provinces_visited, 
+                                   visited_status = rep("Far", length(provinces_visited)))
+			   
+## 读取地图
+country      <- readOGR("bou1_4l.shp")
+province     <- readOGR("province_polygon.shp")    ## 省界
+province$ID  <- as.character(province$ID) 
+
+## 转换为ggplot2绘图用的数据框
+country_df  <- fortify(country)
+province_df <- fortify(province)
+
+## 提取省级数据中的信息
+province_dat <- province@data
+
+## 改正省级数据中关于香港和澳门的错误
+index_HK <- which(province_dat$ID == "Xianggang")
+province_dat$X[index_HK] <- 114.156121
+province_dat$Y[index_HK] <-  22.37725
+province_dat$ID[index_HK] <- "Hong Kong"
+
+index_MC <- which(province_dat$ID == "Aomen")
+province_dat$X[index_MC] <- 113.545681
+province_dat$Y[index_MC] <-  20.197303
+province_dat$ID[index_MC] <- "Macau"
+
+## id与province_df数据表中的省出现的顺序相同， 这里id都从0开始， 所以需要减去1，以便匹配
+province_dat$id <- as.character(1:nrow(province_dat) - 1)
+
+## 增加省拼音
+province_dat2 <- merge(province_dat, provinces_visited_df, by.x = "ID", 
+                       by.y = "province_pinyin", all.x = TRUE)
+
+## 由于visited status 默认是 factor 类型， 这里需要先转换为字符串， 再处理
+province_dat2$visited_status <- as.character(province_dat2$visited_status)
+
+## 所有没有匹配上的省份都是没有去过的， 状态为 not yet
+province_dat2$visited_status[is.na(province_dat2$visited_status)] <- "Close"
+province_dat2[province_dat2$ID==c("Taiwan"),]$visited_status <- "Not considered"
+# province_dat2[province_dat2$ID==c("Ningxia"),]$visited_status <- "Low"
+# province_dat2[province_dat2$ID==c("Hainan"),]$visited_status <- "Low"
+# province_dat2[province_dat2$ID==c("NeiMongol"),]$visited_status <- "Low"
+# province_dat2[province_dat2$ID==c("Xizang"),]$visited_status <- "Low"
+# province_dat2[province_dat2$ID==c("Guizhou"),]$visited_status <- "Low"
+
+# province_dat2$visited_status[is.na(province_dat2$visited_status)] <- "Not considered"
+
+province_df_merged <- merge(province_df, province_dat2, by = "id")
+
+province_df_merged$visited_status2 <- province_df_merged$visited_status
+province_df_merged$visited_status2[province_df_merged$visited_status=="Close"] <- "pink"
+province_df_merged$visited_status2[province_df_merged$visited_status=="Far"] <- "skyblue"
+province_df_merged$visited_status2[province_df_merged$visited_status=="Not considered"] <- "grey"
+
+## 绘图
+## 用geom_path绘制读取的polyline，因为国界线是polyline
+## 投影为多圆锥投影 http://desktop.arcgis.com/zh-cn/arcmap/10.3/guide-books/map-projections/polyconic.htm
+ggplot() + 
+########  geom_path(data = country_df, aes(x = long, y = lat, group=group), colour="darkblue") +  
+coord_map("polyconic") +                                                
+geom_polygon(data = province_df_merged, aes(x = long, y = lat, group=group, fill = visited_status), colour="azure4",lwd=0.5) +  # color of boundary
+# geom_text(mapping = aes(x = X, y = Y, label = ID), 
+# 	   data = province_dat, colour = 'Black')+
+# ggtitle("Provinces I have been to:") + 
+xlab("Longitude") + 
+ylab("Latitude") + 
+theme(legend.position = "right") + 
+#legend("bottomleft",  legend=c("Close","Far","Not considered"),col=c("pink","skyblue","azure4")) + 
+# scale_fill_discrete(name = "Province",values = province_df_merged$visited_status2)
+scale_fill_manual(name="Classification",values = c("pink","skyblue","grey"))
+#unique(province_df_merged$visited_status)
+# province_dat2$ID
+
+```
+
+```{r}
+mp <- matrix(as.numeric(unlist(corr.test(log_dif_date)[4])),ncol = 31)
+mp[upper.tri(mp)] <- 0
+mp <- mp + t(mp) - diag(diag(mp))
+adm <- abs(matrix(as.numeric(unlist(corr.test(log_dif_date)[1])),ncol = 31))*(mp<0.05)
+diag(adm) <- 0
+filt_adm <- TMFG(adm)$A
+#adm[adm != 0] <- (2*(1-adm[adm != 0]))**0.5
+cname <-  c("Anhui","Beijing","Fujian","Gansu","Guangdong","Guangxi","Guizhou","Hainan","Hebei","Henan",
+            "Heilongjiang","Hubei","Hunan","Jilin","Jiangsu","Jiangxi","Liaoning","Inner Mongolia","Ningxia","Qinghai",
+            "Shandong","Shanxi","Shaanxi","Shanghai","Sichuan","Tianjin","Tibet","Xinjiang","Yunnan","Zhejiang","Chongqing")
+cn_name <- cname
+dis_name <- c("Anhui","Beijing","Chongqing","Fujian","Gansu","Guangdong","Guangxi","Guizhou","Hainan","Hebei","Henan",
+            "Heilongjiang","Hubei","Hunan","Jilin","Jiangsu","Jiangxi","Liaoning","Inner Mongolia","Ningxia","Qinghai",
+            "Shandong","Shanxi","Shaanxi","Shanghai","Sichuan","Tianjin","Tibet","Xinjiang","Yunnan","Zhejiang")
+gdp_name<- c("Beijing","Tianjin","Hebei","Shanxi","Inner Mongolia","Liaoning","Jilin","Heilongjiang",
+              "Shanghai","Jiangsu","Zhejiang","Anhui","Fujian","Jiangxi","Shandong","Henan","Hubei","Hunan",
+              "Guangdong","Guangxi","Hainan","Chongqing","Sichuan","Guizhou","Yunnan","Tibet",
+             "Shaanxi","Gansu","Qinghai","Ningxia","Xinjiang")
+g_int <- graph_from_adjacency_matrix( filt_adm ,weighted=TRUE,mode="undirected")
+
+V(g_int)$name <- cn_name
+#plot(minimum.spanning.tree(g_int),layout=layout.spring ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+plot(g_int,layout=layout.svd,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7,vertex.color=2)
+sort(page.rank(g_int)$vector,decreasing = T)
+assortativity_degree(g_int); edge_density(g_int);
+
+```
+
+```{r}
+diag(adm) <- 1
+dimnames(adm) <- list(cn_name,cn_name)
+plot( hclust(as.dist( ((1-adm)*2)^.5 ),method = "single"),ylab="Distance",xlab="Provoncial index",main="Stock indices cluster dendrogram")
+abline(quantile( (((1-adm)*2)^.5)[upper.tri(adm)],.05),0,col=2,)
+hclust(as.dist( ((1-adm)*2)^.5 ),method = "single")[[2]]<quantile( (((1-adm)*2)^.5)[upper.tri(adm)],.05)
+hclust(as.dist( ((1-adm)*2)^.5 ),method = "single")[[2]]
+quantile( (((1-adm)*2)^.5)[upper.tri(adm)],.03)
+hist((((1-adm)*2)^.5)[upper.tri(adm)])
+```
+
+```{r}
+long_mat <- matrix(ncol = 31,nrow = 31)
+short_mat <- matrix(ncol = 31,nrow = 31)
+two_emd <- list()
+count=0
+for(i in 1:31){for(j in i:31) {count=count+1;print(i);two_emd[[count]] <- list(emd(log_dif_date[,i]),emd(log_dif_date[,j]))}}
+```
+
+```{r}
+sep <- 4
+count <- 0
+for(i in 1:31){;for(j in i:31) {
+  count<-count+1
+  short_mat[i,j] <- cor( apply(two_emd[[count]][[1]]$imf[,1:sep],1,sum),apply(two_emd[[count]][[2]]$imf[,1:sep],1,sum) )
+  long_mat[i,j] <- cor( apply(two_emd[[count]][[1]]$imf[,-1:-sep],1,sum)+two_emd[[count]][[1]]$residue,apply(two_emd[[count]][[2]]$imf[,-1:-sep],1,sum)+two_emd[[count]][[2]]$residue )  
+  } }
+
+
+short_term <- matrix(ncol=31,nrow=31)
+short_term[upper.tri(short_term)] <- short_mat[upper.tri(short_mat)];short_term[lower.tri(short_term)]<-t(short_mat[upper.tri(short_mat)]);diag(short_term)<-1
+long_term <- matrix(ncol=31,nrow=31)
+long_term[upper.tri(long_term)] <- long_mat[upper.tri(long_mat)];long_term[lower.tri(long_term)]<-t(long_mat[upper.tri(long_mat)]);diag(long_term)<-1
+```
+
+```{r}
+g_short <- graph_from_adjacency_matrix( (2*(1-short_term))**0.5,weighted=TRUE,mode="undirected")
+V(g_short)$name <- cn_name
+plot(minimum.spanning.tree(g_short),layout=layout.spring ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+sort(closeness(g_short),decreasing = T)
+dimnames(short_term) <- list(cn_name,cn_name)
+plot( hclust(as.dist((2*(1-short_term))**0.5),method = "single") )
+```
+
+```{r}
+g_long <- graph_from_adjacency_matrix( (2*(1-long_term))**0.5 ,weighted=TRUE,mode="undirected")
+V(g_long)$name <- cn_name
+plot(minimum.spanning.tree(g_long),layout=layout.spring ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+sort(closeness(g_long),decreasing = T)
+dimnames(long_term) <- list(cn_name,cn_name)
+plot( hclust(as.dist((2*(1-long_term))**0.5),method = "single") )
+```
+# 5 years
+```{r}
+half_win <- 120
+start <- 1+half_win ; end <- nrow(log_dif_date)-half_win
+
+for(i in seq(start,end,2*half_win) ){
+   corr <- corr.test(log_dif_date[(i-half_win):(i+half_win),])
+   
+   mp <- matrix(as.numeric(unlist(corr[4])),ncol = 31)
+   mp[upper.tri(mp)] <- 0
+   mp <- mp + t(mp) - diag(diag(mp))
+   
+   adm <- matrix(as.numeric(unlist(corr[1])),ncol = 31)*(mp<0.05)
+   # adm[adm != 0] <- (2*(1-adm[adm != 0]))**0.5
+   adm <- TMFG(adm)$A
+   diag(adm) <- 0
+   
+   g <- graph_from_adjacency_matrix( adm ,weighted=TRUE,mode="undirected")
+   V(g)$name <- cn_name
+   # plot(minimum.spanning.tree(g),layout=layout_with_graphopt ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+   print(sort(page.rank(g)$vector,decreasing = T)[1:5] )
+   print(sort(page.rank(g)$vector,decreasing = T)[27:31] )
+   print("#########")
+}
+```
+
+```{r}
+w_cor <- function(dt){
+   delt <- nrow(dt)
+   theta <- delt/7
+   wtd.cors( dt,weight = c( exp(  ((1:delt)-delt)/theta  )  ) )
+}
+```
+
+```{r}
+half_win <- 140
+start <- 1+half_win ; end <- nrow(log_dif_date)#-half_win
+r_mean <- c()
+r_var <- c()
+for(i in seq(start,end) ){
+   # corr <- corr.test(log_dif_date[(i-half_win):(i+half_win),])[[1]]
+   corr <- w_cor(log_dif_date[(i-half_win):(i),])
+   corr <- as.numeric(corr[upper.tri(corr)])
+  
+   r_mean[i-half_win] <- mean(corr)
+   r_var[i-half_win] <- sd(corr)
+}
+```
+
+```{r}
+start <- 1+half_win ; end <- nrow(log_dif_date)#-half_win
+r_mean_clus_1 <- c();r_mean_clus_2 <- c();r_mean_clus_3 <- c();r_var_clus_1 <- c();r_var_clus_2 <- c();r_var_clus_3 <- c()
+left_num <- c(7,18,19,27,8,20,9,22,29,23,28,4)
+right_num <- seq(1,31)[-left_num]
+eigen_sim <- c()
+
+for(i in seq(start,end) ){
+   # corr_clus_1 <- corr.test(log_dif_date[(i-half_win):(i+half_win),][,c(2,3,5,24)])[[1]]
+   # corr_clus_2 <- corr.test(log_dif_date[(i-half_win):(i+half_win),][,c(1,12,13,15,30)])[[1]]
+   # corr_clus_3 <- corr.test(log_dif_date[(i-half_win):(i+half_win),][,c(7,18,19,27,8,20)])[[1]]
+   # corr_clus_1 <- as.numeric(corr_clus_1[upper.tri(corr_clus_1)])
+   # corr_clus_2 <- as.numeric(corr_clus_2[upper.tri(corr_clus_2)])
+   # corr_clus_3 <- as.numeric(corr_clus_3[upper.tri(corr_clus_3)])
+   
+   corr_clus_1 <- w_cor(log_dif_date[(i-half_win):(i),][,c(2,3,5,24)])
+   corr_clus_2 <- w_cor(log_dif_date[(i-half_win):(i),][,c(1,12,13,15,30,1,10,17,25)])
+   # corr_clus_3 <- w_cor(log_dif_date[(i-half_win):(i),][,c(7,18,19,27,8,20)])
+   corr_clus_1 <- as.numeric(corr_clus_1[upper.tri(corr_clus_1)])
+   corr_clus_2 <- as.numeric(corr_clus_2[upper.tri(corr_clus_2)])
+   # corr_clus_3 <- as.numeric(corr_clus_3[upper.tri(corr_clus_3)])
+   
+   
+   # corr_clus_1 <- corr.test(log_dif_date[(i-half_win):(i+half_win),][,left_num])[[1]]
+   # corr_clus_2 <- corr.test(log_dif_date[(i-half_win):(i+half_win),][,right_num])[[1]]
+   # corr_clus_1 <- as.numeric(corr_clus_1[upper.tri(corr_clus_1)])
+   # corr_clus_2 <- as.numeric(corr_clus_2[upper.tri(corr_clus_2)])
+  
+   r_mean_clus_1[i-half_win] <- mean(corr_clus_1)
+   r_var_clus_1[i-half_win] <- sd(corr_clus_1)
+   r_mean_clus_2[i-half_win] <- mean(corr_clus_2)
+   r_var_clus_2[i-half_win] <- sd(corr_clus_2)
+   # r_mean_clus_3[i-half_win] <- mean(corr_clus_3)
+   # r_var_clus_3[i-half_win] <- sd(corr_clus_3)
+   
+   # if(i == end) break
+   # # eigen_sim[i-half_win] <- sml( corr.test(log_dif_date[(start-half_win+1):(start+1),])[[1]],corr.test(log_dif_date[(i-half_win):(i),])[[1]] ,3)
+   # adm <- corr.test(log_dif_date[(i-half_win):(i),])[[1]]
+   # diag(adm) <- 0
+   # g_int <- graph_from_adjacency_matrix( TMFG(adm)$A ,weighted=TRUE,mode="undirected")
+   # eigen_sim[i-half_win] <- assortativity_degree(g_int)
+}
+```
+
+```{r}
+ss <- read.csv("000001.SS.csv")
+ss$Date <- as.Date(ss$Date)
+ss<- ss[50:1458,]
+```
+
+```{r}
+png( "pic1.png",height=1200,width=4000,, res=200)
+plot(raw_data[[1]][half_win:(end-1)],r_mean,type="l",ylim = c(.6,.98),ylab="Mean",xlab="Time",col="azure4",lwd=2,font=2,font.lab=2)
+lines(raw_data[[1]][half_win:(end-1)],r_mean_clus_1,col="pink",lwd=2)
+lines(raw_data[[1]][half_win:(end-1)],r_mean_clus_2,col="skyblue",lwd=2)
+ # ines(raw_data[[1]][half_win:(end-1)],r_mean_clus_3,col=4)
+legend("bottomright",  legend=c("All","Cluster A","Cluster B"),col=c("azure4","pink","skyblue"),lty=1,lwd=2)
+title(main="Means of Correlations",cex.main=2)
+box(col="grey50")
+dev.off()
+
+png( "pic2.png",height=1200,width=4000,, res=200)
+plot(raw_data[[1]][half_win:(end-1)],r_var,type="l",ylim=c(0,.2),ylab="Standard deviation",xlab="Time",col="azure4",lwd=2,font.lab=2)
+lines(raw_data[[1]][half_win:(end-1)],r_var_clus_1,col="pink",lwd=2)
+lines(raw_data[[1]][half_win:(end-1)],r_var_clus_2,col="skyblue",lwd=2)
+# lines(raw_data[[1]][half_win:(end-1)],r_var_clus_3,col=4)
+legend("topright",  legend=c("All","Cluster A","Cluster B"),col=c("azure4","pink","skyblue"),lty=1,lwd=2)
+title(main="SDs of Correlations",cex.main=2)
+box(col="grey50")
+dev.off()
+
+png( "pic3.png",height=1200,width=4000,, res=200)
+plot(raw_data[[1]][half_win:(end-1)],ss[,2][half_win:(end-1)],type="l",ylab="Closing index",xlab="Time",col="azure4",lwd=2,font.lab=2)
+title(main="SSE Composite Index",cex.main=2)
+box(col="grey50")
+dev.off()
+```
+
+```{r}
+te_p <- function(x,y){
+  dis <-c()
+  for(i in 1:500) dis[i] <- calc_te(shuff(x),y)
+  (quantile(dis,probs = c(0.95))[[1]] < calc_te(x,y)) * calc_te(x,y)
+}
+
+trans_entro <- matrix(nrow = 31,ncol=31)
+for(i in 1:31){for(j in 1:31) {trans_entro[i,j] <- te_p(log_dif_date[,i],log_dif_date[,j]) } }
+```
+
+```{r}
+g_entro <- graph_from_adjacency_matrix( t(trans_entro) ,weighted=TRUE,mode="directed")
+V(g_entro)$name <- cn_name
+sort(page.rank(g_entro)$vector,decreasing = T)
+# plot(g_entro,layout=layout_with_graphopt ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+```
+
+```{r}
+trans_entro_50<-trans_entro*(trans_entro>quantile(as.numeric(trans_entro)[as.numeric(trans_entro)>0],probs =.5)[[1]])
+g_entro_50 <- graph_from_adjacency_matrix( t(trans_entro_50) ,weighted=TRUE,mode="directed")
+V(g_entro_50)$name <- cn_name
+sort(page.rank(g_entro_50)$vector,decreasing = T)
+```
+
+```{r}
+granger_result <- matrix(nrow = 31,ncol = 31)
+for(i in 1:31) for(j in 1:31){
+  if(i ==j ){next()}
+  granger_result[i,j] <-grangertest(x=log_dif_date[,i],y=log_dif_date[,j])[[4]][2]
+}
+granger_result <- (granger_result < 0.05)
+diag(granger_result) <- 0
+```
+
+```{r}
+g_granger <- graph_from_adjacency_matrix( t(granger_result) ,mode="directed")
+V(g_granger)$name <- cn_name
+sort(page.rank(g_granger)$vector,decreasing = T)
+plot(g_granger)
+```
+
+
+```{r}
+row_num <- nrow(log_dif_date)
+cor_head_1 <- matrix(nrow=31,ncol = 31)
+for(i in 1:31){for(j in 1:31){
+cor_t <- corr.test(log_dif_date[,i][-1],log_dif_date[,j][-row_num])
+cor_head_1[i,j] <- cor_t[[1]]*( cor_t[[4]] <0.05 )
+}}
+diag(cor_head_1) <- 0
+
+cor_behind_1 <- matrix(nrow=31,ncol = 31)
+for(i in 1:31){for(j in 1:31){
+cor_t <- corr.test(log_dif_date[,i][-row_num],log_dif_date[,j][-1])
+cor_behind_1[i,j] <- cor_t[[1]]*( cor_t[[4]] <0.05 )
+}}
+diag(cor_behind_1) <- 0
+```
+
+```{r}
+cor_1 <- cor_head_1/2 + cor_behind_1/2 + abs(cor_head_1/2 - cor_behind_1/2)
+
+# cor_1<-cor_1*(cor_1>quantile(as.numeric(cor_1)[as.numeric(cor_1)>0],probs =.9)[[1]])
+
+adm <- (2*(1-cor_1))**0.5
+diag(adm) <- 0
+g_cor_1 <- graph_from_adjacency_matrix( adm ,weighted=TRUE,mode="undirected")
+# g_cor_1 <- graph_from_adjacency_matrix( cor_1 ,weighted=TRUE,mode="undirected")
+V(g_cor_1)$name <- cn_name
+plot(minimum.spanning.tree(g_cor_1),layout=layout_with_graphopt ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7)
+print(sort(closeness(g_cor_1),decreasing = T) )
+```
+
+
+
+```{r}
+half_win <- 70
+start <- 1+half_win ; end <- nrow(log_dif_date)-half_win
+r_mean_1 <- c()
+r_var_1 <- c()
+for(k in seq(start,end) ){
+    dt_t <- log_dif_date[(k-half_win):(k+half_win),]
+    row_num <- nrow(dt_t)
+    cor_head_1 <- matrix(nrow=31,ncol = 31)
+    for(i in 1:31){for(j in 1:31){
+    cor_t <- corr.test(dt_t[,i][-1],dt_t[,j][-row_num])
+    cor_head_1[i,j] <- cor_t[[1]]#*( cor_t[[4]] <0.05 )
+    }}
+    diag(cor_head_1) <- 0
+    
+    cor_behind_1 <- t(cor_head_1)
+    
+    corr <- cor_head_1/2 + cor_behind_1/2 + abs(cor_head_1/2 - cor_behind_1/2)
+  
+   r_mean_1[k-half_win] <- mean(corr)
+   r_var_1[k-half_win] <- var(as.numeric(corr))
+}
+```
+
+```{r}
+plot(raw_data[[1]][half_win:(end-1)],r_mean_1)
+plot(raw_data[[1]][half_win:(end-1)],r_var_1)
+```
+
+```{r}
+raw_data[1041,]
+```
+
+```{r}
+pro_cor_2014 <- matrix(as.numeric(unlist(corr.test(log_dif_date[64:308,])[1])),ncol = 31)#*(mp<0.05)  1:63   64:308
+dimnames(pro_cor_2014) <- list(cname,cname)
+pro_cor_2014 <- pro_cor_2014[ioname2012,ioname2012]
+
+pro_cor_2015 <- matrix(as.numeric(unlist(corr.test(log_dif_date[309:552,])[1])),ncol = 31)#*(mp<0.05)  1:63   64:308
+dimnames(pro_cor_2015) <- list(cname,cname)
+pro_cor_2015 <- pro_cor_2015[ioname2012,ioname2012]
+
+pro_cor_2016 <- matrix(as.numeric(unlist(corr.test(log_dif_date[553:796,])[1])),ncol = 31)#*(mp<0.05)  1:63   64:308
+dimnames(pro_cor_2016) <- list(cname,cname)
+pro_cor_2016 <- pro_cor_2016[ioname2012,ioname2012]
+
+pro_cor_2017 <- matrix(as.numeric(unlist(corr.test(log_dif_date[797:1040,])[1])),ncol = 31)#*(mp<0.05)  1:63   64:308
+dimnames(pro_cor_2017) <- list(cname,cname)
+pro_cor_2017 <- pro_cor_2017[ioname2012,ioname2012]
+
+
+y_2014 <- as.numeric(pro_cor_2014[upper.tri(pro_cor_2014)])
+y_2015 <- as.numeric(pro_cor_2015[upper.tri(pro_cor_2015)])
+y_2016 <- as.numeric(pro_cor_2016[upper.tri(pro_cor_2016)])
+y_2017 <- as.numeric(pro_cor_2017[upper.tri(pro_cor_2017)])
+# Another test for 2007n and 2010
+# pro_cor <- pro_cor[ioname,ioname]
+# pro_io_sum <- pro_io2007+t(pro_io2007)
+#pro_io_sum <- pro_io2010+t(pro_io2010)
+
+# pro_io_sum <- pro_io2012+t(pro_io2012)
+# x <- as.numeric(pro_io_sum[upper.tri(pro_io_sum)])
+# reg_io_cor <- lm(  y  ~ x   )
+# summary(  reg_io_cor    )
+# plot( x , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+# abline(reg_io_cor$coefficients[[1]],reg_io_cor$coefficients[[2]],col="red3",lwd = 3)
+# length(as.numeric(pro_cor[upper.tri(pro_cor)]))
+```
+
+```{r}
+regs <- lm(  y_2014  ~   distc  )
+summary(regs)
+
+regs <- lm(  y_2014  ~   gdp_disimi_2014  )
+summary(regs)
+
+regs <- lm(  y_2014  ~   asym_2014   )
+summary(regs)
+
+regs <- lm(  y_2014  ~  meangdp_2014  )
+summary(regs)
+
+# regs <- lm(  y_2014  ~   gdp_disimi_2014  + asym_2014 + meangdp_2014  )
+# summary(regs)
+
+regs <- lm(  y_2014  ~   distc + gdp_disimi_2014  + asym_2014 + meangdp_2014  )
+summary(regs)
+
+# regs <- lm(  y_2015  ~   distc + gdp_disimi_2015  + asym_2015 + meangdp_2015  )
+# summary(regs)
+# # summary(step(regs,direction = "both"))
+# 
+# regs <- lm(  y_2016  ~   distc + gdp_disimi_2016  + asym_2016 + meangdp_2016  )
+# summary(regs)
+# 
+# regs <- lm(  y_2017  ~   distc + gdp_disimi_2017  + asym_2017 + meangdp_2017  )
+# summary(regs)
+
+# cor( matrix(c(distc ,gdp_disimi ,asym,meangdp),ncol=4) )
+# 
+# summary(lm(  trade_int  ~  meangdp + distc +  dismi +  asym   ))
+# summary(lm( meangdp   ~  trade_int + distc +  dismi +  asym   ))
+# summary(lm(  distc  ~  meangdp + trade_int +  dismi +  asym   ))
+# summary(lm( dismi   ~  meangdp + trade_int + distc  +  asym   ))
+# summary(lm( asym   ~  meangdp + trade_int + distc  +  dismi   ))
+# 
+# summary(lm(y  ~   distc))
+# summary(lm(y  ~   gdp_disimi))
+# summary(lm(y  ~   asym))
+# summary(lm(y  ~   meangdp))
+# 
+# summary(lm(gdp_disimi~distc+ asym + meangdp))
+# 
+# plot(distc,log(gdp_disimi))
+# plot(asym,regs$residuals)
+# 
+# nrow(raw_data)
+
+# summary(asym);sd(asym);
+# skew(meangdp);kurtosi(meangdp)
+
+```
+
+```{r}
+regs <- lm(  y_2015  ~   distc  )
+summary(regs)
+
+regs <- lm(  y_2015  ~   gdp_disimi_2015  )
+summary(regs)
+
+regs <- lm(  y_2015  ~   asym_2015   )
+summary(regs)
+
+regs <- lm(  y_2015  ~  meangdp_2015  )
+summary(regs)
+
+# regs <- lm(  y_2015  ~   gdp_disimi_2015  + asym_2015 + meangdp_2015  )
+# summary(regs)
+
+regs <- lm(  y_2015  ~   distc + gdp_disimi_2015  + asym_2015 + meangdp_2015  )
+summary(regs)
+```
+
+```{r}
+regs <- lm(  y_2016  ~   distc  )
+summary(regs)
+
+regs <- lm(  y_2016  ~   gdp_disimi_2016  )
+summary(regs)
+
+regs <- lm(  y_2016  ~   asym_2016   )
+summary(regs)
+
+regs <- lm(  y_2016  ~  meangdp_2016  )
+summary(regs)
+
+# regs <- lm(  y_2016  ~   gdp_disimi_2016  + asym_2016 + meangdp_2016  )
+# summary(regs)
+
+regs <- lm(  y_2016  ~   distc + gdp_disimi_2016  + asym_2016 + meangdp_2016  )
+summary(regs)
+```
+
+```{r}
+regs <- lm(  y_2017  ~   distc  )
+summary(regs)
+
+regs <- lm(  y_2017  ~   gdp_disimi_2017  )
+summary(regs)
+
+regs <- lm(  y_2017  ~   asym_2017   )
+summary(regs)
+
+regs <- lm(  y_2017  ~  meangdp_2017  )
+summary(regs)
+
+# regs <- lm(  y_2017  ~   gdp_disimi_2017  + asym_2017 + meangdp_2017  )
+# summary(regs)
+
+# regs <- lm(  y_2017  ~   distc + gdp_disimi_2017  + meangdp_2017  )
+# summary(regs)
+
+regs <- lm(  y_2017  ~   distc + gdp_disimi_2017  + asym_2017 + meangdp_2017  )
+summary(regs)
+```
+
+```{r}
+des_stat  <- function(x){
+   print(summary(x))
+   print(sd(x))
+   print(skew(x))
+   print(kurtosi(x))
+}
+
+des_stat(y_2014)
+des_stat(y_2015)
+des_stat(y_2016)
+des_stat(y_2017)
+```
+
+```{r}
+des_stat(meangdp_2014)
+des_stat(meangdp_2015)
+des_stat(meangdp_2016)
+des_stat(meangdp_2017)
+```
+
+```{r}
+regs <- lm(  y_2014  ~   asym_2014 + gdp_disimi_2014   + meangdp_2014  )  #+ asym_2014
+summary(regs)
+
+regs <- lm(  y_2015  ~   asym_2015 + gdp_disimi_2015   + meangdp_2015  )  #
+summary(regs)
+
+regs <- lm(  y_2016  ~   asym_2016 + gdp_disimi_2016   + meangdp_2016  )  #
+summary(regs)
+
+regs <- lm(  y_2017  ~   asym_2017 + gdp_disimi_2017   + meangdp_2017  )  #
+summary(regs)
+```
+
+```{r}
+1/(1- summary(lm(  meangdp_2014 ~ distc + asym_2014 + gdp_disimi_2014   ))$r.squared)
+1/(1- summary(lm(  distc ~ meangdp_2014 + asym_2014 + gdp_disimi_2014   ))$r.squared)
+1/(1- summary(lm(  asym_2014 ~ meangdp_2014 +distc +  gdp_disimi_2014   ))$r.squared)
+1/(1- summary(lm(  gdp_disimi_2014 ~ meangdp_2014 +distc + asym_2014    ))$r.squared)
+```
+
+```{r}
+1/(1- summary(lm(  meangdp_2015 ~ distc + asym_2015 + gdp_disimi_2015   ))$r.squared)
+1/(1- summary(lm(  distc ~ meangdp_2015 + asym_2015 + gdp_disimi_2015   ))$r.squared)
+1/(1- summary(lm(  asym_2015 ~ meangdp_2015 +distc +  gdp_disimi_2015   ))$r.squared)
+1/(1- summary(lm(  gdp_disimi_2015 ~ meangdp_2015 +distc + asym_2015    ))$r.squared)
+```
+
+```{r}
+1/(1- summary(lm(  meangdp_2016 ~ distc + asym_2016 + gdp_disimi_2016   ))$r.squared)
+1/(1- summary(lm(  distc ~ meangdp_2016 + asym_2016 + gdp_disimi_2016   ))$r.squared)
+1/(1- summary(lm(  asym_2016 ~ meangdp_2016 +distc +  gdp_disimi_2016   ))$r.squared)
+1/(1- summary(lm(  gdp_disimi_2016 ~ meangdp_2016 +distc + asym_2016    ))$r.squared)
+```
+
+```{r}
+1/(1- summary(lm(  meangdp_2017 ~ distc + asym_2017 + gdp_disimi_2017   ))$r.squared)
+1/(1- summary(lm(  distc ~ meangdp_2017 + asym_2017 + gdp_disimi_2017   ))$r.squared)
+1/(1- summary(lm(  asym_2017 ~ meangdp_2017 +distc +  gdp_disimi_2017   ))$r.squared)
+1/(1- summary(lm(  gdp_disimi_2017 ~ meangdp_2017 +distc + asym_2017    ))$r.squared)
+```
+
+```{r}
+regs <- lm(  y_2014  ~   asym_2014   )  #+ asym_2014
+summary(regs)
+
+regs <- lm(  y_2015  ~   asym_2015  )  #
+summary(regs)
+
+regs <- lm(  y_2016  ~   asym_2016  )  #
+summary(regs)
+
+regs <- lm(  y_2017  ~   asym_2017  )  #
+summary(regs)
+```
+
+```{r}
+regs <- lm( distc ~ gdp_disimi_2016 + asym_2016 + meangdp_2016 )  # distc + gdp_disimi_2016  + asym_2016 + meangdp_2016
+summary(regs)
+```
+
+```{r}
+rcorr(matrix(c(distc, gdp_disimi_2014 , asym_2014 , meangdp_2014),ncol=4))
+
+rcorr(matrix(c(distc, gdp_disimi_2015 , asym_2015 , meangdp_2015),ncol=4))
+
+rcorr(matrix(c(distc, gdp_disimi_2016 , asym_2016 , meangdp_2016),ncol=4))
+
+rcorr(matrix(c(distc, gdp_disimi_2017 , asym_2017 , meangdp_2017),ncol=4))
+```
+
+```{r}
+colnames(gdp_sd) <- ioname2012;rownames(gdp_sd) <- ioname2012
+plot(hclust(as.dist(gdp_sd)))
+```
+
+```{r}
+pro_gdp <- read.csv("pro_gdp.csv",header = T)
+pro_gdp2012 <- pro_gdp$X2012
+names(pro_gdp2012) <- gdp_name
+pro_gdp2012 <- pro_gdp2012[ioname2012]
+pro_gdp2013 <- pro_gdp$X2013
+names(pro_gdp2013) <- gdp_name
+pro_gdp2013 <- pro_gdp2013[ioname2012]
+
+pro_gdp2014 <- pro_gdp$X2014
+names(pro_gdp2014) <- gdp_name
+pro_gdp2014 <- pro_gdp2014[ioname2012]
+
+pro_gdp2015 <- pro_gdp$X2015
+names(pro_gdp2015) <- gdp_name
+pro_gdp2015 <- pro_gdp2015[ioname2012]
+
+pro_gdp2016 <- pro_gdp$X2016
+names(pro_gdp2016) <- gdp_name
+pro_gdp2016 <- pro_gdp2016[ioname2012]
+
+pro_gdp2017 <- pro_gdp$X2017
+names(pro_gdp2017) <- gdp_name
+pro_gdp2017 <- pro_gdp2017[ioname2012]
+
+fin_dis <- matrix(ncol=31,nrow = 31)
+# for (i in 1:31){
+#    for (j in 1:31){
+#       fin_dis[i,j] <- (pro_io2012[i,j]/pro_gdp2012[i] + pro_io2012[j,i]/pro_gdp2012[j])
+#    }
+# }
+for (i in 1:31){
+   for (j in 1:31){
+      fin_dis[i,j] <- (pro_io2012[i,j]/ sum(pro_io2012[i,]) + pro_io2012[j,i]/sum(pro_io2012[j,]))/2
+   }
+}
+
+trade_int <- as.numeric(fin_dis[upper.tri(fin_dis)])
+reg_fin_dis <- lm( y~trade_int )
+summary(  reg_fin_dis    )
+plot( trade_int , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+abline(reg_fin_dis$coefficients[[1]],reg_fin_dis$coefficients[[2]],col="red3",lwd = 3)
+```
+
+```{r}
+pro_dis <- read.csv("pro_dis.csv",header = F)
+pro_dis <- as.matrix.data.frame(pro_dis)
+pro_dis[is.na(pro_dis)] <- 0
+pro_dis <- pro_dis+t(pro_dis)
+dimnames(pro_dis) <- list(dis_name,dis_name)
+pro_dis <- pro_dis[ioname2012,ioname2012]
+#pro_dis <- pro_dis[ioname,ioname]
+distc <- as.numeric(pro_dis[upper.tri(pro_dis)])
+reg_dis <- lm( y~distc )
+summary(  reg_dis    )
+plot( distc , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+abline(reg_dis$coefficients[[1]],reg_dis$coefficients[[2]],col="red3",lwd = 3)
+# length(as.numeric(pro_cor[upper.tri(pro_cor)]))
+```
+
+```{r}
+ionmtable <- read.csv("iotable.csv")
+iotable2012 <- read.csv("2012iotable.csv",header = F)
+iotable2010 <- read.csv("2010iotable.csv",header = F)
+iotable2007 <- read.csv("2007iotable.csv",header = F)
+iotable2012 <- iotable2012[1:1302,]
+iotable2010 <- iotable2010[1:900,1:900]
+iotable2007 <- iotable2007[1:900,1:900]
+```
+   
+```{r}
+iomatrix2012 <- as.matrix(iotable2012,nrow = 31*42)
+iomatrix2010 <- as.matrix(iotable2010,nrow = 900)
+iomatrix2007 <- as.matrix(iotable2007,nrow = 900)
+colnames(iomatrix2012) <- c()#iotable[,1]
+row.names(iomatrix2012) <- c()#iotable[,1]
+pro_io2012 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){for(j in 1:31) pro_io2012[i,j] <- sum(    as.numeric(iomatrix2012[ (1+42*(i-1)) : (42*i) , (1+42*(j-1)) : (42*j) ])   ) }
+pro_io2010 <- matrix(ncol=30,nrow=30)
+for(i in 1:30){for(j in 1:30) pro_io2010[i,j] <- sum(iomatrix2010[ (1+30*(i-1)) : (30*i) , (1+30*(j-1)) : (30*j) ]) }
+pro_io2007 <- matrix(ncol=30,nrow=30)
+for(i in 1:30){for(j in 1:30) pro_io2007[i,j] <- sum(iomatrix2007[ (1+30*(i-1)) : (30*i) , (1+30*(j-1)) : (30*j) ]) }
+```
+
+```{r}
+am_ratio <- c()
+for (i in 1:31){
+am_ratio <- c(am_ratio, sum(iotable2012[ c( (42*(i-1)+1),(42*(i-1)+14):(42*(i-1)+14) ) , -((1+42*(i-1)) : (42*i)) ])/sum(pro_io2012[i,-i]) )   #1:27 (42*(i-1)+1),(42*(i-1)+4),
+}
+names(am_ratio) <- ioname2012
+sort(am_ratio,T)
+mean(am_ratio)
+```
+
+
+```{r}
+disimi2012 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){for(j in 1:31){ 
+#    disimi2012[i,j] <- sum(abs( 
+#       apply(iomatrix2012[ (1+42*(i-1)) : (42*i) , ],1,sum)/sum(iomatrix2012[ (1+42*(i-1)) : (42*i) ,  ])
+#       -apply(iomatrix2012[ (1+42*(j-1)) : (42*j) , ],1,sum)/sum(iomatrix2012[ (1+42*(j-1)) : (42*j) ,  ])  
+#       ))
+# }
+# }
+#apply(iomatrix2012[ (1+42*(i-1)) : (42*i) , (1+42*(j-1)) : (42*j) ],1,sum)/sum(iomatrix2012[ (1+42*(i-1)) : (42*i) , (1+42*(j-1)) : (42*j) ])
+disimi2012[i,j] <- sum(abs( 
+      apply(iomatrix2012[ (1+42*(i-1)) : (42*i) ,-((1+42*(i-1)) : (42*i)) ],1,sum)/sum(iomatrix2012[ (1+42*(i-1)) : (42*i) , -((1+42*(i-1)) : (42*i)) ])
+      -apply(iomatrix2012[ (1+42*(j-1)) : (42*j) , -((1+42*(j-1)) : (42*j))],1,sum)/sum(iomatrix2012[ (1+42*(j-1)) : (42*j) ,-((1+42*(j-1)) : (42*j))  ])  
+      ))
+}
+}
+
+yyyy <- as.numeric(pro_cor[upper.tri(pro_cor)])
+dismi <- as.numeric(disimi2012[upper.tri(disimi2012)])
+reg_disimi <- lm( y~dismi )
+summary(  reg_disimi    )
+plot( dismi , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+abline(reg_disimi$coefficients[[1]],reg_disimi$coefficients[[2]],col="red3",lwd = 3)
+
+```
+
+```{r}
+ioname <- c()
+for(k in 1:30)ioname[k] <- strsplit(as.character(ionmtable[,1][seq(1,900,30)]),"_")[[k]][1]
+
+# diag(pro_io) <- 0
+# g_io <- graph_from_adjacency_matrix( pro_io ,weighted=TRUE,mode="directed")
+# V(g_io)$name <- ioname
+# sort(page_rank(g_io)$vector,decreasing = T)
+# print("####")
+# sort(strength(g_io,mode = "all"),decreasing = T)
+# cluster_optimal(g_io)
+ioname2012 <- c(ioname[1:25],"Tibet",ioname[26:30])
+
+dimnames(pro_io2012) <- list(ioname2012,ioname2012)
+dimnames(pro_io2010) <- list(ioname,ioname)
+dimnames(pro_io2007) <- list(ioname,ioname)
+```
+
+```{r}
+pro_io_sum2012 <- pro_io2012#+t(pro_io2012)
+#pro_io_sum2012 <- pro_io_sum2012[-26,-26]
+pro_io_sum2010 <- pro_io2010#+t(pro_io2010)
+pro_io_sum2007 <- pro_io2007#+t(pro_io2007)
+# diag(pro_io_sum2012) <- 0;diag(pro_io_sum2010) <- 0;diag(pro_io_sum2007) <- 0
+#pro_io_sum2007 <- pro_io_sum2007/sum(pro_io_sum2007);pro_io_sum2010 <- pro_io_sum2010/sum(pro_io_sum2010);pro_io_sum2012 <- pro_io_sum2012/sum(pro_io_sum2012)
+# 
+# aline <- array(c(pro_io_sum2007,pro_io_sum2010,pro_io_sum2012),c(30,30,3))[1,1,]
+# plot(c(7,10,12),(aline),ylim=c(-0.0,0.01) )
+# for (i in 1:30) {
+#    for (j in 1:30) {
+#       aline <- array(c(pro_io_sum2007,pro_io_sum2010,pro_io_sum2012),c(30,30,3))[i,j,]
+#       lines(c(7,10,12),(aline) )
+#    }
+# }
+adm <- pro_io_sum2012
+# adm <- TMFG(pro_io_sum2012)$A
+#adm <- pro_io_sum2012
+g_int <- graph_from_adjacency_matrix(adm,weighted=TRUE,mode="directed",diag = F)
+sort(page_rank(g_int)$vector,decreasing = T)
+
+yy <- page_rank(g_int)$vector
+xx <- pro_gdp2012[ioname2012]
+summary(lm( yy~  xx))
+# 
+# regs <- lm( yy~ xx )
+# plot( xx , yy ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+# abline(regs$coefficients[[1]],regs$coefficients[[2]],col="red3",lwd = 3)
+
+
+plot(g_int,layout=layout_nicely
+     ,vertex.label.color="#030303",vertex.label.font=1.5,vertex.label.dist=1.3,vertex.size=6,edge.arrow.size=0.3,vertex.label.cex=.7,vertex.color=2)
+```
+
+```{r}
+sml <- function(a,b,k=5){
+ # a <- a/sum(a)
+ # b <- b/sum(b)
+ a<- TMFG(a)$A
+ b <- TMFG(b)$A
+
+ 1-mean( abs(eigen(a)$values[1:k]-eigen(b)$values[1:k]) / abs(eigen(a)$values[1:k]+eigen(b)$values[1:k]) )
+}
+
+sml2 <- function(a,b,k=5){
+ 1-mean( abs(eigen(a)$values[1:k]-eigen(b)$values[1:k]) / abs(eigen(a)$values[1:k]+eigen(b)$values[1:k]) )
+}
+sml(pro_io_sum2010,pro_io_sum2007,5)
+sml(pro_io_sum2012,pro_io_sum2010,5)
+
+sml(iomatrix2012,iomatrix2010,10)  #0.8252623
+sml(iomatrix2007,iomatrix2010,10)  #0.7322808
+
+cor(as.numeric(log(pro_io_sum2012)[upper.tri(pro_io_sum2012)]),as.numeric(log(pro_io_sum2010)[upper.tri(pro_io_sum2010)]))
+cor(as.numeric(log(pro_io_sum2007)[upper.tri(pro_io_sum2007)]),as.numeric(log(pro_io_sum2010)[upper.tri(pro_io_sum2010)]))
+
+sml2(iomatrix2012,iomatrix2010,10)  #0.8335628
+sml2(iomatrix2007,iomatrix2010,10)  #0.7303464
+
+
+
+```
+
+
+
+
+```{r}
+library(SDMTools)
+
+pro_gdp_new <- read.csv("pro_gdp_new.csv",header = F)
+
+gdp_for_sd_2014 <- matrix(ncol = 12,nrow = 31)
+gdp_for_sd_2015 <- matrix(ncol = 12,nrow = 31)
+gdp_for_sd_2016 <- matrix(ncol = 12,nrow = 31)
+gdp_for_sd_2017 <- matrix(ncol = 12,nrow = 31)
+
+for(i in 1:12) gdp_for_sd_2017[,i] <- log(pro_gdp_new[,1:12])[,13-i]
+for(i in 1:12) gdp_for_sd_2016[,i] <- log(pro_gdp_new[,5:16])[,13-i]
+for(i in 1:12) gdp_for_sd_2015[,i] <- log(pro_gdp_new[,9:20])[,13-i]
+for(i in 1:12) gdp_for_sd_2014[,i] <- log(pro_gdp_new[,13:24])[,13-i]
+
+# for(i in 1:20) gdp_for_sd_2016[,i] <- log(pro_gdp_new[,1:20])[,21-i]
+# for(i in 1:20) gdp_for_sd_2015[,i] <- log(pro_gdp_new[,5:24])[,21-i]
+# for(i in 1:20) gdp_for_sd_2014[,i] <- log(pro_gdp_new[,9:29])[,21-i]
+
+gdp_for_sd_2014 <- t(diff( t(as.matrix.data.frame( gdp_for_sd_2014 )) ))
+gdp_for_sd_2015 <- t(diff( t(as.matrix.data.frame( gdp_for_sd_2015 )) ))
+gdp_for_sd_2016 <- t(diff( t(as.matrix.data.frame( gdp_for_sd_2016 )) ))
+gdp_for_sd_2017 <- t(diff( t(as.matrix.data.frame( gdp_for_sd_2017 )) ))
+
+rownames(gdp_for_sd_2014) <- gdp_name
+rownames(gdp_for_sd_2015) <- gdp_name
+rownames(gdp_for_sd_2016) <- gdp_name
+rownames(gdp_for_sd_2017) <- gdp_name
+
+gdp_for_sd_2014 <- gdp_for_sd_2014[ioname2012,]
+gdp_for_sd_2015 <- gdp_for_sd_2015[ioname2012,]
+gdp_for_sd_2016 <- gdp_for_sd_2016[ioname2012,]
+gdp_for_sd_2017 <- gdp_for_sd_2017[ioname2012,]
+
+wgt = dnorm(seq(-1.5,1.5,3/10))
+
+gdp_sd_2014 <- matrix(ncol=31,nrow=31)
+for(i in 1:31) {for(j in 1:31) { gdp_sd_2014[i,j] <- sd(gdp_for_sd_2014[i,]-gdp_for_sd_2014[j,]) }}
+gdp_sd_2015 <- matrix(ncol=31,nrow=31)
+for(i in 1:31) {for(j in 1:31) { gdp_sd_2015[i,j] <- sd(gdp_for_sd_2015[i,]-gdp_for_sd_2015[j,]) }}
+gdp_sd_2016 <- matrix(ncol=31,nrow=31)
+for(i in 1:31) {for(j in 1:31) { gdp_sd_2016[i,j] <- sd(gdp_for_sd_2016[i,]-gdp_for_sd_2016[j,]) }}
+gdp_sd_2017 <- matrix(ncol=31,nrow=31)
+for(i in 1:31) {for(j in 1:31) { gdp_sd_2017[i,j] <- sd(gdp_for_sd_2017[i,]-gdp_for_sd_2017[j,]) }}
+
+asym_2014<- as.numeric(gdp_sd_2014[upper.tri(gdp_sd_2014)])
+asym_2015<- as.numeric(gdp_sd_2015[upper.tri(gdp_sd_2015)])
+asym_2016<- as.numeric(gdp_sd_2016[upper.tri(gdp_sd_2016)])
+asym_2017<- as.numeric(gdp_sd_2017[upper.tri(gdp_sd_2017)])
+
+regs <- lm(  y  ~ asym2014   )
+summary(  regs    )
+plot( asym , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+abline(regs$coefficients[[1]],regs$coefficients[[2]],col="red3",lwd = 3)
+```
+
+```{r}
+# gdp_ma2013 <- matrix(ncol=31,nrow=31)
+# for(i in 1:31){ for (j in 1:31) {gdp_ma2013[i,j] <- mean( log(c(pro_gdp2013[i] ,pro_gdp2013[j])) ) }}
+# meangdp<- as.numeric(gdp_ma2013[upper.tri(gdp_ma2013)])
+gdp_ma2014 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){ for (j in 1:31) {gdp_ma2014[i,j] <- mean( c(pro_gdp2014[i] ,pro_gdp2014[j]) ) }}
+meangdp_2014<- as.numeric(gdp_ma2014[upper.tri(gdp_ma2014)])
+
+gdp_ma2015 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){ for (j in 1:31) {gdp_ma2015[i,j] <- mean( c(pro_gdp2015[i] ,pro_gdp2015[j]) ) }}
+meangdp_2015<- as.numeric(gdp_ma2015[upper.tri(gdp_ma2015)])
+
+gdp_ma2016 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){ for (j in 1:31) {gdp_ma2016[i,j] <- mean( c(pro_gdp2016[i] ,pro_gdp2016[j]) ) }}
+meangdp_2016<- as.numeric(gdp_ma2016[upper.tri(gdp_ma2016)])
+
+gdp_ma2017 <- matrix(ncol=31,nrow=31)
+for(i in 1:31){ for (j in 1:31) {gdp_ma2017[i,j] <- mean( c(pro_gdp2017[i] ,pro_gdp2017[j]) ) }}
+meangdp_2017<- as.numeric(gdp_ma2017[upper.tri(gdp_ma2017)])
+
+
+regs <- lm(  y  ~ meangdp2014   )
+summary(  regs    )
+plot( meangdp , y ,col="grey40",ylab="Correlation",xlab="log(SumIO)",main="Regression Plot")
+abline(regs$coefficients[[1]],regs$coefficients[[2]],col="red3",lwd = 3)
+```
+
+```{r}
+pro_gdp_ind_2014 <- as.matrix.data.frame(read.csv("pro_gdp_ind_2014.csv",header = F))
+row.names(pro_gdp_ind_2014) <-gdp_name
+pro_gdp_ind_2014 <- pro_gdp_ind_2014[ioname2012,]#[,-9]
+pro_gdp_ind_mat_2014 <- matrix(ncol=31,nrow=31)
+for(i in 1:31)for (j in 1:31) pro_gdp_ind_mat_2014[i,j] <- mean(  abs(pro_gdp_ind_2014[i,]/sum(pro_gdp_ind_2014[i,]) - pro_gdp_ind_2014[j,]/sum(pro_gdp_ind_2014[j,]))  )
+gdp_disimi_2014 <- pro_gdp_ind_mat_2014[upper.tri(pro_gdp_ind_mat_2014)]
+
+pro_gdp_ind_2015 <- as.matrix.data.frame(read.csv("pro_gdp_ind_2015.csv",header = F))
+row.names(pro_gdp_ind_2015) <-gdp_name
+pro_gdp_ind_2015 <- pro_gdp_ind_2015[ioname2012,]#[,-9]
+pro_gdp_ind_mat_2015 <- matrix(ncol=31,nrow=31)
+for(i in 1:31)for (j in 1:31) pro_gdp_ind_mat_2015[i,j] <- mean(  abs(pro_gdp_ind_2015[i,]/sum(pro_gdp_ind_2015[i,]) - pro_gdp_ind_2015[j,]/sum(pro_gdp_ind_2015[j,]))  )
+gdp_disimi_2015 <- pro_gdp_ind_mat_2015[upper.tri(pro_gdp_ind_mat_2015)]
+
+pro_gdp_ind_2016 <- as.matrix.data.frame(read.csv("pro_gdp_ind_2016.csv",header = F))
+row.names(pro_gdp_ind_2016) <-gdp_name
+pro_gdp_ind_2016 <- pro_gdp_ind_2016[ioname2012,]#[,-9]
+pro_gdp_ind_mat_2016 <- matrix(ncol=31,nrow=31)
+for(i in 1:31)for (j in 1:31) pro_gdp_ind_mat_2016[i,j] <- mean(  abs(pro_gdp_ind_2016[i,]/sum(pro_gdp_ind_2016[i,]) - pro_gdp_ind_2016[j,]/sum(pro_gdp_ind_2016[j,]))  )
+gdp_disimi_2016 <- pro_gdp_ind_mat_2016[upper.tri(pro_gdp_ind_mat_2016)]
+
+pro_gdp_ind_2017 <- as.matrix.data.frame(read.csv("pro_gdp_ind_2017.csv",header = F))
+row.names(pro_gdp_ind_2017) <-gdp_name
+pro_gdp_ind_2017 <- pro_gdp_ind_2017[ioname2012,]#[,-9]
+pro_gdp_ind_mat_2017 <- matrix(ncol=31,nrow=31)
+for(i in 1:31)for (j in 1:31) pro_gdp_ind_mat_2017[i,j] <- mean(  abs(pro_gdp_ind_2017[i,]/sum(pro_gdp_ind_2017[i,]) - pro_gdp_ind_2017[j,]/sum(pro_gdp_ind_2017[j,]))  )
+gdp_disimi_2017 <- pro_gdp_ind_mat_2017[upper.tri(pro_gdp_ind_mat_2016)]
+
+regs <- lm(  y  ~ gdp_disimi_2014   )
+summary(  regs    )
+plot(gdp_disimi,y)
+abline(regs$coefficients[[1]],regs$coefficients[[2]],col="red3",lwd = 3)
+
+ave_gdp_dis<- apply(pro_gdp_ind_mat,1,mean)
+names(ave_gdp_dis) <- ioname2012
+sort(ave_gdp_dis)
+
+pro_gdp_ind / apply(pro_gdp_ind,1,sum)
+dimnames(pro_gdp_ind_mat ) <- list(ioname2012,ioname2012)
+plot(hclust( as.dist(pro_gdp_ind_mat )))
+```
+
+```{r}
+sum(apply(pro_gdp_ind_mat_2014,1,sum) < apply(pro_gdp_ind_mat_2014,1,sum)[3])
+sum(apply(pro_gdp_ind_mat_2015,1,sum) < apply(pro_gdp_ind_mat_2015,1,sum)[3])
+sum(apply(pro_gdp_ind_mat_2016,1,sum) < apply(pro_gdp_ind_mat_2016,1,sum)[3])
+sum(apply(pro_gdp_ind_mat_2017,1,sum) < apply(pro_gdp_ind_mat_2017,1,sum)[3])
+```
+
+```{r}
+sum(apply(gdp_sd_2014,1,sum) < apply(gdp_sd_2014,1,sum)[3])
+sum(apply(gdp_sd_2015,1,sum) < apply(gdp_sd_2015,1,sum)[3])
+sum(apply(gdp_sd_2016,1,sum) < apply(gdp_sd_2016,1,sum)[3])
+sum(apply(gdp_sd_2017,1,sum) < apply(gdp_sd_2017,1,sum)[3])
+```
+
+```{r}
+self_ratio <- c()
+for( i in 1:31 ) self_ratio <- c(self_ratio,pro_io2012[i,i]/sum(pro_io2012[i,]))
+sum(self_ratio < self_ratio[3])
+```
+
+```{r}
+sort(apply(pro_gdp_ind_2014 / apply(pro_gdp_ind_2014,1,sum),1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2015 / apply(pro_gdp_ind_2015,1,sum),1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2016 / apply(pro_gdp_ind_2016,1,sum),1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2017 / apply(pro_gdp_ind_2017,1,sum),1,skew),decreasing = T)
+```
+
+```{r}
+sort(apply(pro_gdp_ind_2014 ,1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2015 ,1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2016 ,1,skew),decreasing = T)
+sort(apply(pro_gdp_ind_2017 ,1,skew),decreasing = T)
+```
+
+```{r}
+sort(kurtosi(t(pro_gdp_ind_2014)),decreasing = T)
+sort(kurtosi(t(pro_gdp_ind_2015)),decreasing = T)
+sort(kurtosi(t(pro_gdp_ind_2016)),decreasing = T)
+sort(kurtosi(t(pro_gdp_ind_2017)),decreasing = T)
+```
+
+```{r}
+chi_rst <- c()
+for (i in 1:31) {
+   chi_rst <- c(chi_rst,chisq.test(pro_gdp_ind_2014[i,]/sum(pro_gdp_ind_2014[i,]))$statistic)
+}
+names(chi_rst) <- ioname2012
+sort(chi_rst,T)
+```
+
+```{r}
+ks_rst <- c()
+for (i in 1:31) ks_rst <- c(ks_rst,ks.test(pro_gdp_ind_2016[i,]/sum(pro_gdp_ind_2016[i,]),punif)$statistic)
+names(ks_rst) <- ioname2012
+sort(ks_rst,T)
+```
+
+```{r}
+sort(sqrt(apply((pro_gdp_ind_2014/apply(pro_gdp_ind_2014,1,sum)-1/9)**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2015/apply(pro_gdp_ind_2015,1,sum)-1/9)**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2016/apply(pro_gdp_ind_2016,1,sum)-1/9)**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2017/apply(pro_gdp_ind_2017,1,sum)-1/9)**2,1,sum)),decreasing = T)
+```
+
+```{r}
+library(ADGofTest)
+ad_rst <- c()
+for (i in 1:31) ad_rst <- c(ad_rst,ad.test(pro_gdp_ind_2017[i,]/sum(pro_gdp_ind_2017[i,]),punif)$statistic)
+names(ad_rst) <- ioname2012
+sort(ad_rst,T)
+```
+
+```{r}
+nation_ind <- read.csv("nation_ind.csv")
+
+sort(sqrt(apply(abs(pro_gdp_ind_2014/apply(pro_gdp_ind_2014,1,sum)-nation_ind$X2014/sum(nation_ind$X2014))**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2015/apply(pro_gdp_ind_2015,1,sum)-nation_ind$X2015/sum(nation_ind$X2015))**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2016/apply(pro_gdp_ind_2016,1,sum)-nation_ind$X2016/sum(nation_ind$X2016))**2,1,sum)),decreasing = T)
+sort(sqrt(apply((pro_gdp_ind_2017/apply(pro_gdp_ind_2017,1,sum)-nation_ind$X2017/sum(nation_ind$X2017))**2,1,sum)),decreasing = T)
+```
+
+
+```{r}
+dimnames(trans_entro) <- list(cname,cname)
+trans_entro_30 <- trans_entro[ioname,ioname]
+summary(lm(  as.numeric(trans_entro_30)[(upper.tri(trans_entro_30)+lower.tri(trans_entro_30))>0]  ~      as.numeric(pro_io)[(upper.tri(pro_io)+lower.tri(pro_io))>0]  ))
+plot(   as.numeric(pro_io)[(upper.tri(pro_io)+lower.tri(pro_io))>0],as.numeric(trans_entro_30)[(upper.tri(trans_entro_30)+lower.tri(trans_entro_30))>0] )
+```
+
+```{r}
+g_ori_cor <- graph_from_adjacency_matrix( pro_cor*(pro_cor>quantile(pro_cor,.15)) ,weighted=TRUE,mode="directed")
+V(g_ori_cor)$name <- ioname
+sort(page_rank(g_ori_cor)$vector,decreasing = T)
+print("####")
+sort(strength(g_ori_cor,mode = "all"),decreasing = T)
+cluster_leading_eigen(g_ori_cor)
+```
+
+```{r}
+# sort((1-diag(pro_io)/apply(pro_io,1,sum))*apply(pro_io,1,sum))
+distri_out <- function(name){
+pro_index <- which.max(ioname==name)
+print(sort(pro_io[name,][-pro_index]/sum(pro_io[name,][-pro_index]),decreasing = T))
+print("#####")
+}
+distri_out("Hebei")
+distri_out("Guangdong")
+distri_out("Jiangsu")
+distri_out("Beijing")
+for(i in 1:31) { print(ioname2012[i]);print( 1-pro_io2012[i,i]/sum(pro_io2012[i,]) ) }
+```
+
+```{r}
+pro_io_sum2012 <- pro_io2012+t(pro_io2012)
+diag(pro_io_sum2012) <- 0
+for (i in seq(1,20,2)){
+indx <- arrayInd(sort.list(pro_io_sum2012,decreasing=T)[1:20],dim(pro_io_sum2012))[i,]
+print( paste(ioname2012[indx[1]],ioname2012[indx[2]]) )
+}
+
+```
+
+```{r}
+for (i in 1:31) {
+  print( adf.test(log_dif_date[,i])$p.value )
+}
+```
+
+
+
+
+
